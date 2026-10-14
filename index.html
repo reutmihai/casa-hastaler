@@ -121,6 +121,15 @@ table.rot th,table.rot td{padding:7px 8px;border-bottom:1px solid var(--line);te
 table.rot th{font-weight:600;color:var(--muted);font-size:.78rem}
 table.rot td.me{font-weight:700}
 .bin{display:flex;align-items:center;gap:10px}
+.wchip{display:inline-block;border-radius:6px;padding:1px 8px;font-size:.78rem;font-weight:700;white-space:nowrap}
+.wday{display:grid;grid-template-columns:118px 1fr;gap:10px;align-items:center;padding:6px 0;border-top:1px solid var(--line)}
+.wday:first-child{border-top:0}
+.wday.next{font-weight:700}
+.wday .d{font-variant-numeric:tabular-nums}
+.wmonth{font-size:.72rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:600;margin-top:10px}
+.wnext{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.wnext .when{font-family:var(--f-display);font-size:1.35rem;font-weight:700}
+.rbtn{font:inherit;font-size:.76rem;font-weight:600;border:1px solid var(--line);background:transparent;color:var(--accent);border-radius:6px;padding:0 6px;cursor:pointer}
 .binchip{border-radius:6px;padding:2px 8px;font-size:.78rem;font-weight:700;min-width:96px;text-align:center;flex:none}
 nav.tabs{position:fixed;left:0;right:0;bottom:0;z-index:20;background:var(--surface);border-top:1px solid var(--line);padding-bottom:env(safe-area-inset-bottom,0px);padding-left:env(safe-area-inset-left,0px);padding-right:env(safe-area-inset-right,0px)}
 nav.tabs .in{max-width:720px;margin:0 auto;display:grid;grid-template-columns:repeat(5,1fr)}
@@ -212,6 +221,10 @@ nav.tabs .badge{position:absolute;top:5px;left:calc(50% + 6px);background:var(--
         <div class="field"><label class="lbl" for="ex-amt">Sumă (€)</label><input id="ex-amt" inputmode="decimal" placeholder="ex. 12,40" required></div>
         <div class="field"><label class="lbl" for="ex-paid">Plătit de</label><select id="ex-paid"></select></div>
         <div class="field full"><span class="lbl">Împărțit la</span><div class="chips" id="ex-split"></div></div>
+        <div class="field full photo-pick">
+          <span class="btn ghost sm filebtn">Adaugă poza bonului<input type="file" id="ex-receipt" accept="image/*" aria-label="Poza bonului"></span>
+          <span id="exReceiptPrev" class="hint">Opțional, ca să vadă toți pe ce s-au dat banii.</span>
+        </div>
       </div>
       <div class="row"><button class="btn" type="submit">Adaugă cheltuiala</button></div>
     </form>
@@ -250,9 +263,10 @@ nav.tabs .badge{position:absolute;top:5px;left:calc(50% + 6px);background:var(--
       <ul class="clean" id="noteList"></ul>
     </form>
     <div class="card stack-s">
-      <h2>Gunoiul</h2>
+      <h2>Calendarul de gunoi</h2>
+      <div id="binLegend" class="chips"></div>
       <div id="binList" class="stack-s"></div>
-      <p class="hint">Zilele exacte sunt în Abfallkalender-ul localității. Le poți completa mai jos, la setări.</p>
+      <p class="hint" id="binHint"></p>
     </div>
     <div class="card stack-s">
       <h2>Regulile casei</h2>
@@ -294,7 +308,16 @@ const BINS=[
   {k:'rest',label:'Restmüll',bg:'#374151',fg:'#FFFFFF',what:'restul'},
   {k:'glas',label:'Sticlă',bg:'#15803D',fg:'#FFFFFF',what:'containere de sticlă, pe culori'}
 ];
-const S={config:null,items:[],ledger:[],chores:{},notes:[],tab:'acasa',weekOff:0,forAll:true,photo:null,thumb:null,buyOpen:null,buyDraft:'',armed:null,lastSync:0,busy:false};
+// Codurile din Abfallkalender
+const WASTE={
+  BT:{label:'Bio',bg:'#8B5A2B',fg:'#FFFFFF'},
+  RM:{label:'Restmüll',bg:'#374151',fg:'#FFFFFF'},
+  GS:{label:'Gelber Sack',bg:'#F5C518',fg:'#1B1B12'},
+  PT:{label:'Papier',bg:'#2563EB',fg:'#FFFFFF'},
+  PS:{label:'Problemstoffe',bg:'#C2410C',fg:'#FFFFFF'},
+  GG:{label:'Grüngut',bg:'#15803D',fg:'#FFFFFF'}
+};
+const S={config:null,items:[],ledger:[],chores:{},notes:[],binDates:[],tab:'acasa',weekOff:0,forAll:true,photo:null,thumb:null,exReceipt:null,buyReceipt:null,buyOpen:null,buyDraft:'',armed:null,lastSync:0,busy:false};
 let code=lsGet('casa-code'), me=lsGet('casa-me'), pollT=null, deferredPrompt=null;
 
 function lsGet(k){try{return localStorage.getItem(k)}catch(e){return null}}
@@ -326,7 +349,7 @@ async function refresh(silent){
   if(!code)return;
   try{
     const st=await api('state');
-    S.config=st.house.config;S.items=st.items||[];S.ledger=st.ledger||[];S.chores=st.chores||{};S.notes=st.notes||[];
+    S.config=st.house.config;S.items=st.items||[];S.ledger=st.ledger||[];S.chores=st.chores||{};S.notes=st.notes||[];S.binDates=st.binDates||[];
     S.lastSync=Date.now();banner(null);
     onData();
   }catch(e){
@@ -403,7 +426,7 @@ function renderHome(){
   const m=mem(me);const w=weekIdx(new Date());const a=assign(w);const mine=a.filter(x=>x.member&&x.member.id===me);
   const b=balances();const nb=nextBuyer(b);const myBal=b[me]||0;
   const need=S.items.filter(i=>i.status!=='bought');
-  const bins=cfg().bins||{};const binsSet=BINS.filter(x=>bins[x.k]);
+  const up=upcomingBins();
   let h=`<div><div class="eyebrow">Săptămâna ${dfmt.format(weekStart(w))} – ${dfmt.format(new Date(weekStart(w).getTime()+6*864e5))}</div><h2 style="font-size:1.45rem;margin-top:2px">${m?'Salut, '+esc(m.name):'Bun venit acasă'}</h2></div>`;
   if(!m){h+=`<div class="card stack-s"><h3>Alege cine ești</h3><p class="hint">Așa știe aplicația ce e rândul tău să faci.</p><div class="row"><button class="btn" data-act="pick-me">Alege numele</button></div></div>`}
   else{
@@ -413,6 +436,12 @@ function renderHome(){
       h+=`<div class="row between"><div class="grow"><h3 style="font-size:1.15rem">${esc(x.zone.name)}</h3><div class="hint">${esc(x.zone.tasks)}</div></div>${done?`<button class="btn sm ghost" data-act="chore" data-k="${k}" data-z="${esc(x.zone.id)}" data-w="${w}">Făcut · anulează</button>`:`<button class="btn sm" data-act="chore" data-k="${k}" data-z="${esc(x.zone.id)}" data-w="${w}">Marchează făcut</button>`}</div>`});
     h+=`</div>`;
   }
+  if(up.length){const nx=up[0];const r=binResponsible(nx);
+    h+=`<div class="card stack-s"><span class="eyebrow">Următoarea ridicare de gunoi</span>
+    <div class="wnext"><span class="when">${relDay(nx)}</span><span class="muted">${esc(wdfmt.format(dayDate(nx)))}</span></div>
+    <div>${wchips(nx.types)}</div>
+    ${r?`<div class="meta">${avatar(r,'sm')} Scoate pubelele: <b>${esc(r.name)}</b>${r.id===me?' <span class="pill turn">tu</span>':''} · seara dinainte</div>`:''}
+    ${up[1]?`<p class="hint">Apoi: ${esc(wdfmt.format(dayDate(up[1])))} · ${esc(up[1].types.map(c=>(WASTE[c]||{label:c}).label).join(', '))}</p>`:''}</div>`}
   h+=`<div class="fgrid">
     <div class="card stack-s"><span class="eyebrow">Soldul tău</span><div class="big ${myBal>0.005?'pos':myBal<-0.005?'neg':''}">${m?eur(myBal):'–'}</div><p class="hint">${!m?'Alege cine ești ca să-ți vezi soldul.':myBal>0.005?'Ai de primit de la colegi.':myBal<-0.005?'Ai de dat colegilor.':'Ești la zi.'}</p></div>
     <div class="card stack-s"><span class="eyebrow">La rând pentru cumpărături comune</span><div class="row">${avatar(nb,'lg')}<div><h3 style="font-size:1.15rem">${esc(nb?nb.name:'–')}${nb&&nb.id===me?' <span class="pill turn">tu</span>':''}</h3><p class="hint">a pus cel mai puțin până acum</p></div></div></div>
@@ -422,20 +451,32 @@ function renderHome(){
   else h+=`<ul class="clean" style="gap:6px">${need.slice(0,4).map(i=>`<li class="row"><span style="font-weight:600">${esc(i.name)}</span>${i.qty?`<span class="muted">× ${esc(i.qty)}</span>`:''}${i.forAll===false?`<span class="tag personal">${esc(nm(i.by))}</span>`:''}</li>`).join('')}${need.length>4?`<li class="hint">și încă ${need.length-4}</li>`:''}</ul>`;
   h+=`</div>`;
   if(S.notes.length)h+=`<div class="card stack-s"><span class="eyebrow">Avizier</span>${S.notes.slice(0,2).map(n=>`<div><p style="margin:0;white-space:pre-wrap;overflow-wrap:anywhere">${esc(n.text)}</p><div class="meta">${avatar(mem(n.by),'sm')} ${esc(nm(n.by))} · ${when(n.at)}</div></div>`).join('')}</div>`;
-  if(binsSet.length)h+=`<div class="card stack-s"><span class="eyebrow">Gunoiul</span>${binsSet.map(x=>`<div class="bin"><span class="binchip" style="background:${x.bg};color:${x.fg}">${x.label}</span><span>${esc(bins[x.k])}</span></div>`).join('')}</div>`;
   el.innerHTML=h;
 }
+/* ---------- gunoi ---------- */
+const wdfmt=new Intl.DateTimeFormat('ro-RO',{weekday:'short',day:'numeric',month:'short'});
+const monfmt=new Intl.DateTimeFormat('ro-RO',{month:'long',year:'numeric'});
+function localISO(d){return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')}
+function dayDate(b){return new Date(String(b.day).slice(0,10)+'T12:00:00')}
+function upcomingBins(){const t=localISO(new Date());return S.binDates.filter(b=>String(b.day).slice(0,10)>=t)}
+function relDay(b){const t=new Date();t.setHours(12,0,0,0);const n=Math.round((dayDate(b)-t)/864e5);return n<=0?'Azi':n===1?'Mâine':'Peste '+n+' zile'}
+function wchips(types){return (types||[]).map(c=>{const w=WASTE[c]||{label:c,bg:'#5A6A75',fg:'#FFFFFF'};return `<span class="wchip" style="background:${w.bg};color:${w.fg}">${esc(w.label)}</span>`}).join(' ')}
+function binResponsible(b){const z=(cfg().zones||[]).find(z=>/gunoi/i.test(z.name));if(!z)return null;const a=assign(weekIdx(dayDate(b))).find(x=>x.zone.id===z.id);return a?a.member:null}
 function itemCard(it){
   const by=mem(it.by);const forAll=it.forAll!==false;let actH;
   if(S.buyOpen===it.id){
     const split=forAll?'împărțit la toată casa':(it.by===me?'doar pentru tine, deci nu intră la datorii':'plătit de tine pentru '+esc(nm(it.by)));
-    actH=`<form class="stack-s" data-form="buy" data-id="${esc(it.id)}" style="margin-top:8px"><label class="lbl" for="buy-price">Cât a costat? (opțional)</label><div class="row"><input id="buy-price" inputmode="decimal" placeholder="ex. 4,99" value="${esc(S.buyDraft)}" style="max-width:140px"><button class="btn sm" type="submit">Gata, cumpărat</button><button type="button" class="btn sm quiet" data-act="buy-cancel">Renunță</button></div><p class="hint">Prețul intră la Bani, ${split}.</p></form>`;
+    actH=`<form class="stack-s" data-form="buy" data-id="${esc(it.id)}" style="margin-top:8px"><label class="lbl" for="buy-price">Cât a costat? (opțional)</label><div class="row"><input id="buy-price" inputmode="decimal" placeholder="ex. 4,99" value="${esc(S.buyDraft)}" style="max-width:140px"><button class="btn sm" type="submit">Gata, cumpărat</button><button type="button" class="btn sm quiet" data-act="buy-cancel">Renunță</button></div>
+    <div class="photo-pick"><span class="btn ghost sm filebtn">Poza bonului<input type="file" id="buy-receipt" accept="image/*" aria-label="Poza bonului"></span><span class="hint">${S.buyReceipt?`<img src="${S.buyReceipt}" alt="Bon"> <button type="button" class="btn sm quiet" data-act="buy-receipt-clear">Scoate</button>`:'Opțional'}</span></div>
+    <p class="hint">Prețul și bonul intră la Bani, ${split}.</p></form>`;
   } else actH=`<div class="row act"><button type="button" class="btn sm" data-act="buy-open" data-id="${esc(it.id)}">Am cumpărat</button>${delBtn('item',it.id)}</div>`;
   return `<li class="item card">${it.thumb?`<button type="button" class="thumb" data-act="zoom" data-id="${esc(it.id)}" aria-label="Mărește poza"><img src="${esc(it.thumb)}" alt=""></button>`:`<div class="thumb ph" aria-hidden="true">${esc(initial(it.name))}</div>`}
   <div style="min-width:0"><div class="item-title">${esc(it.name)}${it.qty?` <span class="qty">× ${esc(it.qty)}</span>`:''}</div>${it.note?`<div class="item-note">${esc(it.note)}</div>`:''}
   <div class="meta">${avatar(by,'sm')} ${esc(by?by.name:'?')} · ${forAll?'<span class="tag">toată casa</span>':`<span class="tag personal">doar pentru ${esc(by?by.name:'?')}</span>`}</div>${actH}</div></li>`;
 }
-function renderList(){
+function renderList(force){
+  // nu redesena lista cât timp cineva completează „Am cumpărat” (altfel se pierde poza aleasă)
+  if(!force&&S.buyOpen&&$('#needList [data-form="buy"]')){return}
   const need=S.items.filter(i=>i.status!=='bought').sort((a,b)=>(a.forAll===false)-(b.forAll===false)||String(b.at).localeCompare(String(a.at)));
   $('#needCount').textContent=need.length?need.length+(need.length===1?' produs':' produse'):'';
   $('#needList').innerHTML=need.length?need.map(itemCard).join(''):`<li class="card flat"><p class="hint">Nimic de cumpărat acum. Când se termină ceva, adaugă-l cu formularul de mai sus.</p></li>`;
@@ -463,7 +504,7 @@ function renderMoney(){
   const L=S.ledger.slice(0,40);
   $('#ledgerList').innerHTML=L.length?L.map(e=>{
     if(e.type==='transfer')return `<li><div style="min-width:0"><div>${esc(nm(e.from))} i-a dat lui ${esc(nm(e.to))}</div><div class="meta">decontare · ${when(e.at)}</div></div><div class="row" style="flex-wrap:nowrap"><span class="num" style="font-weight:600">${eur(Number(e.amount))}</span>${delBtn('ledger',e.id,'×')}</div></li>`;
-    const n=(e.split||[]).length;return `<li><div style="min-width:0"><div style="overflow-wrap:anywhere">${esc(e.desc||'Cheltuială')}</div><div class="meta">${avatar(mem(e.paidBy),'sm')} a plătit ${esc(nm(e.paidBy))} · împărțit la ${n===members().length?'toți':n} · ${when(e.at)}</div></div><div class="row" style="flex-wrap:nowrap"><span class="num" style="font-weight:600">${eur(Number(e.amount))}</span>${delBtn('ledger',e.id,'×')}</div></li>`}).join(''):`<li><p class="hint">Nicio cheltuială încă. Prima apare aici după ce o adaugi mai sus sau când bifezi un produs cumpărat cu preț.</p></li>`;
+    const n=(e.split||[]).length;return `<li><div style="min-width:0"><div style="overflow-wrap:anywhere">${esc(e.desc||'Cheltuială')}</div><div class="meta">${avatar(mem(e.paidBy),'sm')} a plătit ${esc(nm(e.paidBy))} · împărțit la ${n===members().length?'toți':n} · ${when(e.at)}${e.hasReceipt?` <button type="button" class="rbtn" data-act="receipt" data-id="${esc(e.id)}">Vezi bonul</button>`:''}</div></div><div class="row" style="flex-wrap:nowrap"><span class="num" style="font-weight:600">${eur(Number(e.amount))}</span>${delBtn('ledger',e.id,'×')}</div></li>`}).join(''):`<li><p class="hint">Nicio cheltuială încă. Prima apare aici după ce o adaugi mai sus sau când bifezi un produs cumpărat cu preț.</p></li>`;
 }
 function renderChores(){
   if(!S.config)return;
@@ -483,8 +524,14 @@ function renderChores(){
 function renderCasa(){
   $('#codeShow').textContent=code||'';
   $('#noteList').innerHTML=S.notes.map(n=>`<li style="border-top:1px solid var(--line);padding-top:10px"><p style="margin:0;white-space:pre-wrap;overflow-wrap:anywhere">${esc(n.text)}</p><div class="row between"><div class="meta">${avatar(mem(n.by),'sm')} ${esc(nm(n.by))} · ${when(n.at)}</div>${delBtn('note',n.id)}</div></li>`).join('');
-  const bins=cfg().bins||{};
-  $('#binList').innerHTML=BINS.map(x=>`<div class="bin"><span class="binchip" style="background:${x.bg};color:${x.fg}">${x.label}</span><div style="min-width:0"><div>${bins[x.k]?esc(bins[x.k]):'<span class="muted">zi necompletată</span>'}</div><div class="hint">${x.what}</div></div></div>`).join('');
+  const up=upcomingBins();
+  $('#binLegend').innerHTML=wchips(Object.keys(WASTE));
+  if(!up.length){$('#binList').innerHTML='<p class="hint">Nu e încă niciun calendar de gunoi.</p>';$('#binHint').textContent='';}
+  else{let lastM='',out='';
+    up.forEach((b,i)=>{const d=dayDate(b);const m=monfmt.format(d);if(m!==lastM){out+=`<div class="wmonth">${esc(m)}</div>`;lastM=m}
+      out+=`<div class="wday ${i===0?'next':''}"><span class="d">${esc(wdfmt.format(d))}</span><span>${wchips(b.types)}${i===0?' <span class="pill turn">următoarea</span>':''}</span></div>`});
+    $('#binList').innerHTML=out;
+    $('#binHint').textContent='Calendarul e completat până pe '+wdfmt.format(dayDate(up[up.length-1])).replace(/\.$/,'')+'. Pubelele se scot seara dinainte.';}
   $('#ruleList').innerHTML=(cfg().rules||[]).map(r=>`<li>${esc(r)}</li>`).join('')||'<li class="muted">Nicio regulă încă.</li>';
 }
 function memberRow(m){return `<div class="srow two" data-row="member" data-id="${esc(m.id)}"><input aria-label="Nume coleg" value="${esc(m.name)}" maxlength="24"><button type="button" class="btn sm quiet" data-act="row-del">Scoate</button></div>`}
@@ -496,7 +543,6 @@ function renderSettings(){
   <div class="stack-s"><h3>Colegi</h3><p class="hint">Ordinea contează pentru rotație. Dacă scoți pe cineva, cheltuielile lui nu mai intră în solduri.</p><div id="memRows" class="stack-s">${(c.members||[]).map(memberRow).join('')}</div><div><button type="button" class="btn sm ghost" data-act="add-member">Adaugă coleg</button></div></div>
   <div class="stack-s"><h3>Zone de curățenie</h3><div id="zoneRows" class="stack-s">${(c.zones||[]).map(zoneRow).join('')}</div><div><button type="button" class="btn sm ghost" data-act="add-zone">Adaugă zonă</button></div></div>
   <div class="field"><label class="lbl" for="set-start">Prima săptămână a rotației (luni)</label><input type="date" id="set-start" value="${esc(c.rotationStart||'2026-10-12')}" style="max-width:200px"></div>
-  <div class="stack-s"><h3>Zilele de gunoi</h3>${BINS.map(x=>`<div class="bin"><span class="binchip" style="background:${x.bg};color:${x.fg}">${x.label}</span><input id="bin-${x.k}" aria-label="Ziua pentru ${x.label}" value="${esc((c.bins||{})[x.k]||'')}" placeholder="ex. marți, la 2 săptămâni" maxlength="60"></div>`).join('')}</div>
   <div class="field"><label class="lbl" for="set-rules">Reguli (una pe rând)</label><textarea id="set-rules" rows="6">${esc((c.rules||[]).join('\n'))}</textarea></div>
   <div class="row"><button class="btn" type="submit">Salvează setările</button></div>`;
 }
@@ -527,8 +573,13 @@ const ACT={
   close(){$('#overlay').hidden=true},
   zoom(t){const it=S.items.find(i=>i.id===t.dataset.id);if(it&&it.thumb)openZoom(it)},
   for(t){S.forAll=t.dataset.v==='all';$('#for-all').setAttribute('aria-pressed',S.forAll);$('#for-me').setAttribute('aria-pressed',!S.forAll)},
-  'buy-open'(t){if(!needMe())return;S.buyOpen=t.dataset.id;S.buyDraft='';renderList();const i=$('#buy-price');if(i)i.focus()},
-  'buy-cancel'(){S.buyOpen=null;renderList()},
+  'buy-open'(t){if(!needMe())return;S.buyOpen=t.dataset.id;S.buyDraft='';S.buyReceipt=null;renderList(true);const i=$('#buy-price');if(i)i.focus()},
+  'buy-cancel'(){S.buyOpen=null;S.buyReceipt=null;renderList(true)},
+  'buy-receipt-clear'(){S.buyReceipt=null;renderList(true)},
+  async receipt(t){const e=S.ledger.find(x=>x.id===t.dataset.id);const o=$('#overlay');
+    o.innerHTML=`<div class="sheet zoom"><p class="hint" id="rcptMsg">Se încarcă bonul…</p><img id="rcptImg" alt="Bon" hidden><h3>${esc(e?e.desc||'Cheltuială':'Bon')}</h3>${e?`<p class="hint">${eur(Number(e.amount))} · a plătit ${esc(nm(e.paidBy))} · ${when(e.at)}</p>`:''}<button type="button" class="btn quiet" data-act="close">Închide</button></div>`;o.hidden=false;
+    try{const r=await api('receipt',{id:t.dataset.id});if(r.receipt&&$('#rcptImg')){$('#rcptImg').src=r.receipt;$('#rcptImg').hidden=false;$('#rcptMsg').hidden=true}else if($('#rcptMsg'))$('#rcptMsg').textContent='Bonul nu mai există.'}
+    catch(err){if($('#rcptMsg'))$('#rcptMsg').textContent='Nu s-a putut încărca bonul. Verifică internetul.'}},
   unbuy(t){act('unbuy_item',{id:t.dataset.id})},
   arm(t){const k=t.dataset.k;S.armed=k;renderAll();setTimeout(()=>{if(S.armed===k){S.armed=null;renderAll()}},4000)},
   async del(t){const[kind,id]=t.dataset.k.split(':');S.armed=null;const a={item:'delete_item',ledger:'delete_ledger',note:'delete_note'}[kind];if(a)await act(a,{id});renderAll()},
@@ -553,6 +604,16 @@ $('#it-photo').addEventListener('change',async e=>{const f=e.target.files&&e.tar
     $('#photoClear').onclick=clearPhoto}
   catch(err){toast('Poza nu s-a putut citi. Încearcă alt fișier.')}});
 function clearPhoto(){S.photo=null;S.thumb=null;$('#it-photo').value='';$('#photoPrev').textContent='Opțional, dacă vrei un produs anume.'}
+// bonurile: rezoluție mai mare, ca să se poată citi textul
+async function receiptFrom(file){const img=await loadImg(file);return resize(img,1400,0.72,600000)}
+$('#ex-receipt').addEventListener('change',async e=>{const f=e.target.files&&e.target.files[0];if(!f)return;
+  try{S.exReceipt=await receiptFrom(f);
+    $('#exReceiptPrev').innerHTML=`<img src="${S.exReceipt}" alt="Bon"> <button type="button" class="btn sm quiet" id="exReceiptClear">Scoate bonul</button>`;
+    $('#exReceiptClear').onclick=clearExReceipt}
+  catch(err){toast('Poza nu s-a putut citi. Încearcă alt fișier.')}});
+function clearExReceipt(){S.exReceipt=null;$('#ex-receipt').value='';$('#exReceiptPrev').textContent='Opțional, ca să vadă toți pe ce s-au dat banii.'}
+document.addEventListener('change',async e=>{if(e.target.id!=='buy-receipt')return;const f=e.target.files&&e.target.files[0];if(!f)return;
+  try{S.buyReceipt=await receiptFrom(f);renderList(true)}catch(err){toast('Poza nu s-a putut citi. Încearcă alt fișier.')}});
 
 document.addEventListener('submit',async e=>{
   e.preventDefault();const f=e.target;
@@ -570,20 +631,21 @@ document.addEventListener('submit',async e=>{
     if(ok){f.reset();clearPhoto();ACT.for({dataset:{v:'all'}})}}
   else if(f.dataset.form==='buy'){const id=f.dataset.id;const raw=$('#buy-price').value.trim();const price=raw?parseAmt(raw):0;
     if(raw&&!(price>0)){toast('Prețul nu e un număr valid. Ex: 4,99');return}
-    const ok=await act('buy_item',{id,by:me,price},price>0?'Bifat și adăugat la Bani.':'Bifat ca și cumpărat.');
-    if(ok){S.buyOpen=null;S.buyDraft='';renderList()}}
+    if(S.buyReceipt&&!(price>0)){toast('Pune și prețul, ca bonul să apară la Bani.');return}
+    const ok=await act('buy_item',{id,by:me,price,receipt:S.buyReceipt||''},price>0?'Bifat și adăugat la Bani.':'Bifat ca și cumpărat.');
+    if(ok){S.buyOpen=null;S.buyDraft='';S.buyReceipt=null;renderList(true)}}
   else if(f.id==='expForm'){if(!needMe())return;const desc=$('#ex-desc').value.trim();const amt=parseAmt($('#ex-amt').value);
     if(!(amt>0)){toast('Suma nu e validă. Ex: 12,40');return}
     const split=[...document.querySelectorAll('#ex-split input:checked')].map(i=>i.value);if(!split.length){toast('Alege cel puțin o persoană la care se împarte.');return}
-    const ok=await act('add_expense',{desc,amount:amt,paidBy:$('#ex-paid').value,split,by:me},'Cheltuială adăugată.');
-    if(ok){$('#ex-desc').value='';$('#ex-amt').value='';renderMoneyForm()}}
+    const ok=await act('add_expense',{desc,amount:amt,paidBy:$('#ex-paid').value,split,by:me,receipt:S.exReceipt||''},'Cheltuială adăugată.');
+    if(ok){$('#ex-desc').value='';$('#ex-amt').value='';clearExReceipt();renderMoneyForm()}}
   else if(f.id==='noteForm'){if(!needMe())return;const text=$('#note-text').value.trim();if(!text)return;
     if(await act('add_note',{text,by:me},'Anunț publicat.'))$('#note-text').value=''}
   else if(f.id==='settingsForm'){
     const ms=[...document.querySelectorAll('#memRows [data-row]')].map(r=>({id:r.dataset.id,name:r.querySelector('input').value.trim()})).filter(m=>m.name);
     const zs=[...document.querySelectorAll('#zoneRows [data-row]')].map(r=>{const i=r.querySelectorAll('input');return{id:r.dataset.id,name:i[0].value.trim(),tasks:i[1].value.trim()}}).filter(z=>z.name);
     if(!ms.length){toast('Pune cel puțin un coleg.');return}
-    const bins={};BINS.forEach(x=>bins[x.k]=$('#bin-'+x.k).value.trim());
+    const bins=cfg().bins||{};
     const c={name:$('#set-name').value.trim()||'Casa noastră',members:ms,zones:zs,bins,rules:$('#set-rules').value.split('\n').map(s=>s.trim()).filter(Boolean),rotationStart:$('#set-start').value||'2026-10-12'};
     if(await act('save_config',{config:c},'Setări salvate.')){$('#settingsBox').open=false;lastCfgJson='';onData()}}
 });
