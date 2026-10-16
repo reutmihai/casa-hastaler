@@ -126,6 +126,8 @@ table.rot td.me{font-weight:700}
 .wday:first-child{border-top:0}
 .wday.next{font-weight:700}
 .wday .d{font-variant-numeric:tabular-nums}
+.wleg{display:grid;grid-template-columns:96px 1fr;gap:10px;align-items:baseline;font-size:.86rem}
+.wleg .wchip{text-align:center}
 .wmonth{font-size:.72rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:600;margin-top:10px}
 .wnext{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
 .wnext .when{font-family:var(--f-display);font-size:1.35rem;font-weight:700}
@@ -264,7 +266,7 @@ nav.tabs .badge{position:absolute;top:5px;left:calc(50% + 6px);background:var(--
     </form>
     <div class="card stack-s">
       <h2>Calendarul de gunoi</h2>
-      <div id="binLegend" class="chips"></div>
+      <div id="binLegend" class="stack-s"></div>
       <div id="binList" class="stack-s"></div>
       <p class="hint" id="binHint"></p>
     </div>
@@ -309,13 +311,14 @@ const BINS=[
   {k:'glas',label:'Sticlă',bg:'#15803D',fg:'#FFFFFF',what:'containere de sticlă, pe culori'}
 ];
 // Codurile din Abfallkalender
+// Codurile din Entsorgungskalender Krauchenwies (Landkreis Sigmaringen), traduse în română
 const WASTE={
-  BT:{label:'Bio',bg:'#8B5A2B',fg:'#FFFFFF'},
-  RM:{label:'Restmüll',bg:'#374151',fg:'#FFFFFF'},
-  GS:{label:'Gelber Sack',bg:'#F5C518',fg:'#1B1B12'},
-  PT:{label:'Papier',bg:'#2563EB',fg:'#FFFFFF'},
-  PS:{label:'Problemstoffe',bg:'#C2410C',fg:'#FFFFFF'},
-  GG:{label:'Grüngut',bg:'#15803D',fg:'#FFFFFF'}
+  BT:{label:'Bio',de:'Biotonne',what:'resturi de mâncare, coji, zaț de cafea',bg:'#8B5A2B',fg:'#FFFFFF'},
+  RM:{label:'Menajer',de:'Restmüll',what:'tot ce nu se reciclează',bg:'#B91C1C',fg:'#FFFFFF'},
+  GS:{label:'Sac galben',de:'Gelber Sack',what:'plastic, metal, ambalaje',bg:'#F5C518',fg:'#1B1B12'},
+  PT:{label:'Hârtie',de:'Papiertonne',what:'hârtie și carton',bg:'#2563EB',fg:'#FFFFFF'},
+  PS:{label:'Periculoase',de:'Problemstoffe',what:'baterii, vopsele, chimicale; se duc la Bahnhof, 8:30–9:15',bg:'#1F2937',fg:'#FFFFFF',dropoff:'Se duc la Bahnhof (Am Bahnhof), între 8:30 și 9:15'},
+  GG:{label:'Crengi',de:'Grüngutbündel',what:'crengi și resturi de grădină, legate în mănunchiuri',bg:'#15803D',fg:'#FFFFFF'}
 };
 const S={config:null,items:[],ledger:[],chores:{},notes:[],binDates:[],tab:'acasa',weekOff:0,forAll:true,photo:null,thumb:null,exReceipt:null,buyReceipt:null,buyOpen:null,buyDraft:'',armed:null,lastSync:0,busy:false};
 let code=lsGet('casa-code'), me=lsGet('casa-me'), pollT=null, deferredPrompt=null;
@@ -440,7 +443,8 @@ function renderHome(){
     h+=`<div class="card stack-s"><span class="eyebrow">Următoarea ridicare de gunoi</span>
     <div class="wnext"><span class="when">${relDay(nx)}</span><span class="muted">${esc(wdfmt.format(dayDate(nx)))}</span></div>
     <div>${wchips(nx.types)}</div>
-    ${r?`<div class="meta">${avatar(r,'sm')} Scoate pubelele: <b>${esc(r.name)}</b>${r.id===me?' <span class="pill turn">tu</span>':''} · seara dinainte</div>`:''}
+    ${nx.types.filter(c=>WASTE[c]&&WASTE[c].dropoff).map(c=>`<p class="hint" style="color:var(--ink)">${esc(WASTE[c].label)}: ${esc(WASTE[c].dropoff)}.</p>`).join('')}
+    ${r&&nx.types.some(c=>!(WASTE[c]&&WASTE[c].dropoff))?`<div class="meta">${avatar(r,'sm')} Scoate pubelele: <b>${esc(r.name)}</b>${r.id===me?' <span class="pill turn">tu</span>':''} · seara dinainte</div>`:''}
     ${up[1]?`<p class="hint">Apoi: ${esc(wdfmt.format(dayDate(up[1])))} · ${esc(up[1].types.map(c=>(WASTE[c]||{label:c}).label).join(', '))}</p>`:''}</div>`}
   h+=`<div class="fgrid">
     <div class="card stack-s"><span class="eyebrow">Soldul tău</span><div class="big ${myBal>0.005?'pos':myBal<-0.005?'neg':''}">${m?eur(myBal):'–'}</div><p class="hint">${!m?'Alege cine ești ca să-ți vezi soldul.':myBal>0.005?'Ai de primit de la colegi.':myBal<-0.005?'Ai de dat colegilor.':'Ești la zi.'}</p></div>
@@ -525,7 +529,7 @@ function renderCasa(){
   $('#codeShow').textContent=code||'';
   $('#noteList').innerHTML=S.notes.map(n=>`<li style="border-top:1px solid var(--line);padding-top:10px"><p style="margin:0;white-space:pre-wrap;overflow-wrap:anywhere">${esc(n.text)}</p><div class="row between"><div class="meta">${avatar(mem(n.by),'sm')} ${esc(nm(n.by))} · ${when(n.at)}</div>${delBtn('note',n.id)}</div></li>`).join('');
   const up=upcomingBins();
-  $('#binLegend').innerHTML=wchips(Object.keys(WASTE));
+  $('#binLegend').innerHTML=Object.keys(WASTE).map(c=>{const w=WASTE[c];return `<div class="wleg">${wchips([c])}<span><b>${esc(w.de)}</b> · ${esc(w.what)}</span></div>`}).join('');
   if(!up.length){$('#binList').innerHTML='<p class="hint">Nu e încă niciun calendar de gunoi.</p>';$('#binHint').textContent='';}
   else{let lastM='',out='';
     up.forEach((b,i)=>{const d=dayDate(b);const m=monfmt.format(d);if(m!==lastM){out+=`<div class="wmonth">${esc(m)}</div>`;lastM=m}
